@@ -68,10 +68,33 @@ kanban) · Follow-ups (overdue/today/upcoming) · Import · Templates · Setting
 | `npm run build` | Production build |
 | `npm test` | Run scoring/normalize unit tests |
 
+## Automated scraping (Scrape Now + daily)
+
+The app can run the whole pipeline itself — **Meta Ad Library → filter to small,
+reachable, founder-led Indian D2C brands → Facebook Pages enrichment (WhatsApp,
+phone, email) → Tier 1–4 score → store**. Because a full scrape takes 2–4 min
+(longer than serverless limits), runs start asynchronously and an **Apify webhook**
+delivers the results back for storage, so it works on any Vercel plan.
+
+Enable it with these env vars (locally in `.env.local` and in Vercel):
+
+| Var | Why |
+|---|---|
+| `APIFY_TOKEN` | Lets the app launch the scrapers. |
+| `SUPABASE_SERVICE_ROLE_KEY` | Lets cron/webhooks store leads (no logged-in user). Keep secret. |
+| `CRON_SECRET` | Secures the `/api/scrape/run` (cron) + `/api/scrape/hook` (webhook) endpoints. |
+| `NEXT_PUBLIC_SITE_URL` | Your deployed URL, so Apify webhooks can call back. |
+
+- **Scrape Now button** — Settings → "Scrape now" (any logged-in user).
+- **Daily auto-scrape** — `vercel.json` runs `/api/scrape/run` at 04:00 UTC (~9:30 AM IST).
+- Tune target niches and the small-brand filter in
+  [lib/scrape-filters.ts](lib/scrape-filters.ts) (e.g. `MAX_PAGE_LIKES`, `NICHE_QUERIES`).
+
 ## Deploy (Vercel)
 
-Push to GitHub, import the repo in Vercel, add the same env vars, deploy. The
-`/api/ingest` route works as a public ingestion webhook.
+Push to GitHub, import the repo in Vercel, add the env vars above (plus the two
+`NEXT_PUBLIC_SUPABASE_*`), deploy. The cron in `vercel.json` is registered
+automatically. `/api/ingest` also works as a public ingestion webhook.
 
 ## Notes
 

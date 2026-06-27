@@ -6,8 +6,8 @@ import type { Tier } from "./types";
  * Signal logic (why these matter for selling RTO services to Indian D2C brands):
  *  - ads_running: brand is actively spending => scaling => feels RTO pain & can pay.
  *  - high-RTO category: apparel/footwear/beauty etc. have the worst COD return rates.
- *  - followers sweet spot (10k-500k): big enough to have order volume, small enough
- *    to still be founder-led and reachable.
+ *  - followers sweet spot (3k-200k): big enough to have order volume, small enough
+ *    to still be founder-led and reachable (won't ignore a new agency).
  *  - reachability: a lead we can actually contact (phone/whatsapp/website) is worth more.
  *
  * Pure function so weights are trivial to tune and unit-test.
@@ -100,9 +100,9 @@ export function scoreLead(
   }
 
   const f = input.followers ?? 0;
-  if (f >= 10_000 && f <= 500_000) {
+  if (f >= 3_000 && f <= 200_000) {
     score += weights.followersSweet;
-    reasons.push("Audience in scaling sweet spot (10k-500k)");
+    reasons.push("Audience in reachable sweet spot (3k-200k)");
   } else if (f > 0) {
     score += weights.followersPartial;
     reasons.push("Has audience (outside ideal range)");
