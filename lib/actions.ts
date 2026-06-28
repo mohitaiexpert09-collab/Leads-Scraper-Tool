@@ -142,6 +142,83 @@ export async function addActivity(input: {
   revalidateAll();
 }
 
+/**
+ * Record an outreach touch (WhatsApp/email/DM) the moment the user opens the
+ * send link. Logs a "message sent" activity and auto-advances a brand-new lead
+ * to "Contacted" so you always know whom you've reached out to.
+ */
+export async function logOutreach(input: { leadId: string; channel: Channel; body: string }) {
+  const sb = await getSupabaseServer();
+  const actor = await getCurrentUserEmail();
+  const now = new Date().toISOString();
+  if (!sb) {
+    const store = demoStore();
+    store.activities.push({
+      id: uid("act"),
+      lead_id: input.leadId,
+      type: "message_sent",
+      channel: input.channel,
+      body: input.body,
+      created_by: actor,
+      created_at: now,
+    });
+    const lead = store.leads.find((l) => l.id === input.leadId);
+    if (lead && lead.status === "new") {
+      lead.status = "contacted";
+      lead.updated_at = now;
+    }
+    revalidatePath(`/leads/${input.leadId}`);
+    revalidateAll();
+    return;
+  }
+  await sb.from("activities").insert({
+    lead_id: input.leadId,
+    type: "message_sent" as ActivityType,
+    channel: input.channel,
+    body: input.body,
+  });
+  // Only nudge a fresh lead forward; never override a later stage.
+  await sb.from("leads").update({ status: "contacted", updated_at: now }).eq("id", input.leadId).eq("status", "new");
+  revalidatePath(`/leads/${input.leadId}`);
+  revalidateAll();
+}
+
+/**
+ * One-tap conversation outcome. "Interested" → Qualified, "Not interested" →
+ * Lost. Logs the disposition with a timestamp so the funnel stays accurate.
+ */
+export async function setDisposition(leadId: string, disposition: "interested" | "not_interested") {
+  const status: LeadStatus = disposition === "interested" ? "qualified" : "lost";
+  const note = disposition === "interested" ? "Marked Interested 👍" : "Marked Not interested 👎";
+  const sb = await getSupabaseServer();
+  const actor = await getCurrentUserEmail();
+  const now = new Date().toISOString();
+  if (!sb) {
+    const store = demoStore();
+    const lead = store.leads.find((l) => l.id === leadId);
+    if (lead) {
+      lead.status = status;
+      lead.updated_at = now;
+    }
+    store.activities.push({
+      id: uid("act"),
+      lead_id: leadId,
+      type: "note",
+      channel: null,
+      body: note,
+      created_by: actor,
+      created_at: now,
+    });
+    revalidatePath(`/leads/${leadId}`);
+    revalidateAll();
+    return;
+  }
+  await sb.from("leads").update({ status, updated_at: now }).eq("id", leadId);
+  await sb.from("activities").insert({ lead_id: leadId, type: "note" as ActivityType, body: note });
+  revalidatePath(`/leads/${leadId}`);
+  revalidateAll();
+}
+
 export async function scheduleFollowUp(input: { leadId: string; dueDate: string; note?: string }) {
   const sb = await getSupabaseServer();
   if (!sb) {

@@ -15,7 +15,7 @@ import {
 } from "lucide-react";
 import { getActivities, getLead, getTemplates } from "@/lib/data";
 import { Card, CardContent, CardHeader, CardTitle, TierBadge, Badge } from "@/components/ui";
-import { StatusControl, LogActivity, FollowUpForm } from "@/components/lead-actions";
+import { StatusControl, LogActivity, FollowUpForm, OutreachActions } from "@/components/lead-actions";
 import { scoreLead } from "@/lib/scoring";
 import { whatsappLink } from "@/lib/whatsapp";
 import { formatNumber, timeAgo } from "@/lib/utils";
@@ -52,6 +52,12 @@ export default async function LeadDetailPage({ params }: { params: Promise<{ id:
     .replace(/\{\{company\}\}/g, lead.company || "your brand")
     .replace(/\{\{category\}\}/g, lead.category || "D2C");
   const wa = whatsappLink(lead.whatsapp || lead.phone, intro);
+
+  // Pre-filled email (mailto) for one-tap, auto-tracked email outreach.
+  const emailSubject = `Cutting RTO losses for ${lead.company || "your brand"}`;
+  const emailHref = lead.email
+    ? `mailto:${lead.email}?subject=${encodeURIComponent(emailSubject)}${intro ? `&body=${encodeURIComponent(intro)}` : ""}`
+    : null;
 
   const contacts = [
     wa && { icon: <MessageCircle size={16} />, label: "WhatsApp", href: wa, color: "var(--color-brand-2)" },
@@ -159,7 +165,22 @@ export default async function LeadDetailPage({ params }: { params: Promise<{ id:
         <div className="space-y-4 lg:col-span-2">
           <Card>
             <CardHeader>
-              <CardTitle>Log outreach</CardTitle>
+              <CardTitle>Outreach</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <OutreachActions
+                leadId={lead.id}
+                whatsappHref={wa}
+                emailHref={emailHref}
+                messagePreview={intro ?? null}
+                emailSubject={emailSubject}
+              />
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>Log outreach manually</CardTitle>
             </CardHeader>
             <CardContent>
               <LogActivity leadId={lead.id} templates={templates} />

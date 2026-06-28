@@ -5,7 +5,7 @@ import type { LeadStatus, Tier } from "@/lib/types";
 import { STATUS_LABELS, TIER_LABELS } from "@/lib/types";
 
 /* ---------------- Button ---------------- */
-const buttonVariants = cva(
+export const buttonVariants = cva(
   "inline-flex items-center justify-center gap-2 rounded-lg text-sm font-medium transition-colors disabled:opacity-50 disabled:pointer-events-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand)]",
   {
     variants: {

@@ -64,7 +64,10 @@ export function ScrapeNow({ ready }: { ready: boolean }) {
     setMsg(null);
     setError(null);
     try {
-      const res = await fetch("/api/scrape/run", { method: "POST" });
+      // Locally, Apify can't call a localhost webhook, so run synchronously
+      // (does the whole pipeline in one request). Deployed, use the async webhook.
+      const isLocal = /^(localhost|127\.0\.0\.1)$/.test(window.location.hostname);
+      const res = await fetch(`/api/scrape/run${isLocal ? "?mode=sync" : ""}`, { method: "POST" });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Scrape failed");
       if (data.mode === "sync") {

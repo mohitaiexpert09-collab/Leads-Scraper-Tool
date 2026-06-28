@@ -106,13 +106,21 @@ async function updateRun(id: string | null, fields: Record<string, unknown>) {
 /* ---------------- orchestration ---------------- */
 
 function hookUrl(stage: string, runRow: string): string {
-  const base = process.env.NEXT_PUBLIC_SITE_URL?.replace(/\/$/, "") || "http://localhost:3000";
+  let base = process.env.NEXT_PUBLIC_SITE_URL?.trim().replace(/\/$/, "") || "http://localhost:3000";
+  // Apify requires a fully-qualified URL; tolerate a site URL entered without a scheme.
+  if (!/^https?:\/\//i.test(base)) base = `https://${base}`;
   const secret = process.env.CRON_SECRET || "";
   return `${base}/api/scrape/hook?stage=${stage}&run=${runRow}&secret=${encodeURIComponent(secret)}`;
 }
 
+// Volume targets for ~100 reachable leads/day. Not every advertiser page yields a
+// reachable lead (some have no public phone/WhatsApp/email), so we over-fetch ads
+// and enrich a wider set of advertiser pages, then keep only the reachable ones.
+const DAILY_MAX_ADS = 300; // ad-library items to pull across all niche queries
+const DAILY_ADVERTISER_CAP = 200; // advertiser pages to enrich via the Pages scraper
+
 /** Stage 0: kick off the Ad Library run (fast; returns immediately). */
-export async function startScrape(queries: string[] = NICHE_QUERIES, maxAds = 20): Promise<{ runRow: string | null }> {
+export async function startScrape(queries: string[] = NICHE_QUERIES, maxAds = DAILY_MAX_ADS): Promise<{ runRow: string | null }> {
   const runRow = await logRun({ source: "facebook", actor_id: AD_LIBRARY_ACTOR, status: "running", params: { queries, maxAds } });
   await startRun(
     AD_LIBRARY_ACTOR,
@@ -125,7 +133,7 @@ export async function startScrape(queries: string[] = NICHE_QUERIES, maxAds = 20
 /** Stage 1 (webhook): ads finished -> filter -> start Pages enrichment run. */
 export async function handleAdsStage(datasetId: string, runRow: string) {
   const ads = await fetchDataset(datasetId);
-  const pageUrls = pickAdvertisers(ads as AdItem[]);
+  const pageUrls = pickAdvertisers(ads as AdItem[], DAILY_ADVERTISER_CAP);
   await updateRun(runRow, { params: { advertisers: pageUrls.length } });
   if (!pageUrls.length) {
     await updateRun(runRow, { status: "completed", leads_found: 0 });
