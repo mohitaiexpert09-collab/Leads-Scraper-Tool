@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { pickAdvertisers, pagesToRaw, cityFromAddress, onlyReachable, type AdItem } from "./scrape-filters";
+import { pickAdvertisers, pagesToRaw, shopifyToRaw, cityFromAddress, onlyReachable, type AdItem } from "./scrape-filters";
 import { normalizeBatch } from "./normalize";
 
 describe("pickAdvertisers", () => {
@@ -53,6 +53,52 @@ describe("pagesToRaw + normalize", () => {
     expect(lead.ads_running).toBe(true);
     expect(lead.city).toBe("Jaipur");
     expect(lead.tier).toBeLessThanOrEqual(2); // ads + clothing + reachable => hot
+  });
+});
+
+describe("shopifyToRaw + normalize", () => {
+  it("maps a Shopify store into a reachable, India-located lead", () => {
+    const raw = shopifyToRaw(
+      [
+        {
+          name: "Jaipur Kurti Co",
+          websiteUrl: "https://jaipurkurti.com",
+          myshopifyDomain: "jaipurkurti.myshopify.com",
+          contacts: [
+            { type: "email", value: "hello@jaipurkurti.com" },
+            { type: "phone", value: "+91 98765 43210" },
+          ],
+          address: { city: "Jaipur", country: "India", zip: "302001" },
+        },
+      ],
+      "kurti"
+    );
+    const [lead] = normalizeBatch(raw, "shopify");
+    expect(lead.company).toBe("Jaipur Kurti Co");
+    expect(lead.email).toBe("hello@jaipurkurti.com");
+    expect(lead.whatsapp).toBe("919876543210");
+    expect(lead.city).toBe("Jaipur");
+    expect(lead.source).toBe("shopify");
+    expect(lead.dedupe_key).toBe("site:jaipurkurti.com");
+  });
+
+  it("salvages contacts from a flat emails/phones shape", () => {
+    const raw = shopifyToRaw([
+      {
+        name: "Bandhani Studio",
+        websiteUrl: "https://bandhanistudio.in",
+        emails: ["care@bandhanistudio.in"],
+        phones: ["09812345678"],
+      },
+    ]);
+    const [lead] = normalizeBatch(raw, "shopify");
+    expect(lead.email).toBe("care@bandhanistudio.in");
+    expect(lead.whatsapp).toBe("919812345678");
+  });
+
+  it("drops marketplaces and big/funded brands by name", () => {
+    expect(shopifyToRaw([{ name: "Nykaa Fashion", websiteUrl: "https://nykaa.com" }])).toHaveLength(0);
+    expect(shopifyToRaw([{ name: "Mamaearth", websiteUrl: "https://mamaearth.in" }])).toHaveLength(0);
   });
 });
 

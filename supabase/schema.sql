@@ -5,8 +5,10 @@ create extension if not exists "pgcrypto";
 
 -- ---------- enums ----------
 do $$ begin
-  create type lead_source as enum ('google_maps','instagram','facebook','manual');
+  create type lead_source as enum ('google_maps','instagram','facebook','shopify','manual');
 exception when duplicate_object then null; end $$;
+-- For databases created before 'shopify' existed:
+alter type lead_source add value if not exists 'shopify';
 
 do $$ begin
   create type lead_status as enum ('new','contacted','follow_up','replied','qualified','won','lost');
@@ -47,10 +49,13 @@ create table if not exists leads (
   owner_id uuid references auth.users(id) on delete set null,
   notes text,
   raw_json jsonb,
+  airtable_id text,
   dedupe_key text unique,
   created_at timestamptz default now(),
   updated_at timestamptz default now()
 );
+-- For databases created before the Airtable mirror:
+alter table leads add column if not exists airtable_id text;
 create index if not exists leads_tier_idx on leads(tier);
 create index if not exists leads_status_idx on leads(status);
 create index if not exists leads_source_idx on leads(source);

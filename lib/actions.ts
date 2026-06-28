@@ -1,11 +1,12 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import type { ActivityType, Channel, LeadStatus, MessageTemplate } from "./types";
+import type { ActivityType, Channel, Lead, LeadStatus, MessageTemplate } from "./types";
 import type { NormalizedLead } from "./normalize";
 import { getSupabaseServer } from "./supabase/server";
 import { demoStore } from "./demo-store";
 import { getCurrentUserEmail } from "./data";
+import { hasAirtable, syncLeadById, syncLeadToAirtable } from "./airtable";
 
 function uid(prefix: string) {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
@@ -71,8 +72,11 @@ export async function ingestLeads(
   const duplicates = leads.length - fresh.length;
   if (fresh.length) {
     const rows = fresh.map(({ ...l }) => ({ ...l, status: "new" as LeadStatus }));
-    const { error } = await sb.from("leads").insert(rows);
+    const { data: inserted, error } = await sb.from("leads").insert(rows).select("*");
     if (error) throw new Error(error.message);
+    if (hasAirtable() && inserted) {
+      for (const row of inserted) await syncLeadToAirtable(row as Lead);
+    }
   }
   revalidateAll();
   return { inserted: fresh.length, duplicates };
@@ -107,6 +111,7 @@ export async function setLeadStatus(id: string, status: LeadStatus) {
     type: "status_change" as ActivityType,
     body: `Status changed to ${status}`,
   });
+  await syncLeadById(id);
   revalidateAll();
 }
 
@@ -179,6 +184,7 @@ export async function logOutreach(input: { leadId: string; channel: Channel; bod
   });
   // Only nudge a fresh lead forward; never override a later stage.
   await sb.from("leads").update({ status: "contacted", updated_at: now }).eq("id", input.leadId).eq("status", "new");
+  await syncLeadById(input.leadId);
   revalidatePath(`/leads/${input.leadId}`);
   revalidateAll();
 }
@@ -215,6 +221,7 @@ export async function setDisposition(leadId: string, disposition: "interested" |
   }
   await sb.from("leads").update({ status, updated_at: now }).eq("id", leadId);
   await sb.from("activities").insert({ lead_id: leadId, type: "note" as ActivityType, body: note });
+  await syncLeadById(leadId);
   revalidatePath(`/leads/${leadId}`);
   revalidateAll();
 }

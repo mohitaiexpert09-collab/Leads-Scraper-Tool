@@ -158,3 +158,116 @@ export function onlyReachable<T extends { whatsapp: string | null; phone: string
 ): T[] {
   return leads.filter((l) => l.whatsapp || l.phone || l.email);
 }
+
+/* ---------------- Shopify source ---------------- */
+
+/**
+ * India D2C niche keywords for Shopify discovery. Ethnic-wear terms are
+ * inherently Indian, so they surface Indian founder-led stores; combined with
+ * ships-to-India this is a strong India proxy.
+ */
+export const SHOPIFY_QUERIES = [
+  "kurti",
+  "saree",
+  "lehenga",
+  "kurta set",
+  "salwar kameez",
+  "anarkali",
+  "chikankari",
+  "kurti brand",
+  "ayurvedic skincare",
+  "handmade jewellery",
+  "shapewear",
+];
+
+const EMAIL_RE = /[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/i;
+
+/** Recursively collect every string inside an arbitrary value (defensive parsing). */
+function collectStrings(v: unknown, out: string[]): void {
+  if (v == null) return;
+  if (typeof v === "string") out.push(v);
+  else if (Array.isArray(v)) for (const x of v) collectStrings(x, out);
+  else if (typeof v === "object") for (const x of Object.values(v as Record<string, unknown>)) collectStrings(x, out);
+}
+
+function pickEmail(store: ShopifyStore): string | null {
+  const all: string[] = [];
+  collectStrings(store.contacts, all);
+  collectStrings(store.emails, all);
+  collectStrings(store.email, all);
+  for (const s of all) {
+    const m = s.match(EMAIL_RE);
+    if (m) return m[0].toLowerCase();
+  }
+  return null;
+}
+
+function pickPhone(store: ShopifyStore): string | null {
+  const all: string[] = [];
+  collectStrings(store.contacts, all);
+  collectStrings(store.phones, all);
+  collectStrings(store.phone, all);
+  for (const s of all) {
+    if (EMAIL_RE.test(s) || /https?:\/\//i.test(s)) continue;
+    const digits = s.replace(/[^\d]/g, "");
+    if (digits.length >= 10 && digits.length <= 13) return s;
+  }
+  return null;
+}
+
+function pickSocial(store: ShopifyStore, needle: string): string | null {
+  const all: string[] = [];
+  collectStrings(store, all);
+  const m = all.find((s) => /^https?:\/\//i.test(s) && s.toLowerCase().includes(needle));
+  return m ?? null;
+}
+
+function addressString(address: unknown): string | null {
+  if (!address) return null;
+  if (typeof address === "string") return address;
+  if (typeof address === "object") {
+    const a = address as Record<string, unknown>;
+    const parts = [a.address1, a.city, a.region, a.state, a.province, a.country, a.zip, a.postalCode]
+      .filter((p): p is string => typeof p === "string" && p.trim().length > 0);
+    return parts.length ? parts.join(", ") : null;
+  }
+  return null;
+}
+
+export interface ShopifyStore {
+  name?: string | null;
+  websiteUrl?: string | null;
+  myshopifyDomain?: string | null;
+  contacts?: unknown;
+  emails?: unknown;
+  email?: unknown;
+  phones?: unknown;
+  phone?: unknown;
+  address?: unknown;
+  [k: string]: unknown;
+}
+
+/**
+ * Map clearpath/shopify-store-leads items into raw shapes for normalizeBatch.
+ * `category` is the niche keyword used for discovery (helps tier scoring).
+ */
+export function shopifyToRaw(stores: ShopifyStore[], category?: string): Record<string, unknown>[] {
+  return stores
+    .filter((s) => !EXCLUDE_NAME.test(s.name || ""))
+    .map((s) => {
+      const phone = pickPhone(s);
+      return {
+        company: s.name ?? null,
+        website: s.websiteUrl || (s.myshopifyDomain ? `https://${s.myshopifyDomain}` : null),
+        email: pickEmail(s),
+        phone,
+        whatsapp: phone,
+        instagram_url: pickSocial(s, "instagram.com"),
+        facebook_url: pickSocial(s, "facebook.com"),
+        city: cityFromAddress(addressString(s.address)),
+        category: category ?? null,
+        ads_running: null,
+        myshopifyDomain: s.myshopifyDomain ?? null,
+      };
+    });
+}

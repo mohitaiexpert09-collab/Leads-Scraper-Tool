@@ -1,13 +1,14 @@
 import { NextResponse } from "next/server";
-import { handleAdsStage, handlePagesStage } from "@/lib/scrape";
+import { handleAdsStage, handlePagesStage, handleShopifyStage } from "@/lib/scrape";
 
 export const maxDuration = 60;
 
 /**
  * Apify success webhook target. Apify POSTs here when an actor run finishes.
  * Secured by the ?secret= we embed in the webhook URL (must match CRON_SECRET).
- * ?stage=ads  -> filter advertisers, start Pages enrichment
- * ?stage=pages -> normalize + score + store leads
+ * ?stage=ads     -> filter advertisers, start Pages enrichment
+ * ?stage=pages   -> normalize + score + store leads
+ * ?stage=shopify -> map Shopify stores -> normalize + score + store leads (&cat=niche)
  */
 export async function POST(req: Request) {
   const url = new URL(req.url);
@@ -35,6 +36,11 @@ export async function POST(req: Request) {
     }
     if (stage === "pages") {
       const result = await handlePagesStage(datasetId, runRow);
+      return NextResponse.json({ ok: true, stage, ...result });
+    }
+    if (stage === "shopify") {
+      const cat = url.searchParams.get("cat") || undefined;
+      const result = await handleShopifyStage(datasetId, runRow, cat);
       return NextResponse.json({ ok: true, stage, ...result });
     }
     return NextResponse.json({ error: "Unknown stage" }, { status: 400 });

@@ -84,6 +84,7 @@ function igUrlFromUsername(username: string | null): string | null {
 
 /** Best-effort source detection from the shape of an Apify dataset item. */
 export function detectSource(raw: Raw): LeadSource {
+  if (raw.myshopifyDomain !== undefined || raw.sampleProducts !== undefined) return "shopify";
   if (raw.username !== undefined || raw.followersCount !== undefined) return "instagram";
   if (raw.pageUrl !== undefined || raw.adStatus !== undefined || raw.likes !== undefined)
     return "facebook";

@@ -1,16 +1,20 @@
 import "server-only";
 import { normalizeBatch, type NormalizedLead } from "./normalize";
 import { getSupabaseAdmin } from "./supabase/admin";
+import { hasAirtable, syncLeadToAirtable } from "./airtable";
 import {
   NICHE_QUERIES,
+  SHOPIFY_QUERIES,
   pickAdvertisers,
   pagesToRaw,
+  shopifyToRaw,
   onlyReachable,
   type AdItem,
   type PageItem,
+  type ShopifyStore,
 } from "./scrape-filters";
 
-export { NICHE_QUERIES };
+export { NICHE_QUERIES, SHOPIFY_QUERIES };
 
 /**
  * Automated scrape pipeline (buying-intent, easily-reachable leads):
@@ -26,6 +30,11 @@ export { NICHE_QUERIES };
 const APIFY = "https://api.apify.com/v2";
 export const AD_LIBRARY_ACTOR = "automation-lab~facebook-ads-library";
 export const PAGES_ACTOR = "apify~facebook-pages-scraper";
+export const SHOPIFY_ACTOR = "clearpath~shopify-store-leads";
+
+// Stores to pull per niche keyword. ~11 keywords × this ≈ enough raw to net ~100
+// reachable, deduped Shopify leads/day.
+const SHOPIFY_PER_QUERY = 12;
 
 function token(): string {
   const t = process.env.APIFY_TOKEN;
@@ -78,8 +87,15 @@ export async function storeLeads(leads: NormalizedLead[]): Promise<{ inserted: n
   const have = new Set((existing ?? []).map((r: { dedupe_key: string }) => r.dedupe_key));
   const fresh = leads.filter((l) => !have.has(l.dedupe_key));
   if (fresh.length) {
-    const { error } = await admin.from("leads").insert(fresh.map((l) => ({ ...l, status: "new" })));
+    const { data: rows, error } = await admin
+      .from("leads")
+      .insert(fresh.map((l) => ({ ...l, status: "new" })))
+      .select("*");
     if (error) throw new Error(error.message);
+    // Mirror the freshly inserted leads into Airtable (best-effort).
+    if (hasAirtable() && rows) {
+      for (const row of rows) await syncLeadToAirtable(row as Parameters<typeof syncLeadToAirtable>[0]);
+    }
   }
   return { inserted: fresh.length, duplicates: leads.length - fresh.length };
 }
@@ -105,12 +121,41 @@ async function updateRun(id: string | null, fields: Record<string, unknown>) {
 
 /* ---------------- orchestration ---------------- */
 
-function hookUrl(stage: string, runRow: string): string {
+function hookUrl(stage: string, runRow: string, extra?: Record<string, string>): string {
   let base = process.env.NEXT_PUBLIC_SITE_URL?.trim().replace(/\/$/, "") || "http://localhost:3000";
   // Apify requires a fully-qualified URL; tolerate a site URL entered without a scheme.
   if (!/^https?:\/\//i.test(base)) base = `https://${base}`;
   const secret = process.env.CRON_SECRET || "";
-  return `${base}/api/scrape/hook?stage=${stage}&run=${runRow}&secret=${encodeURIComponent(secret)}`;
+  let url = `${base}/api/scrape/hook?stage=${stage}&run=${runRow}&secret=${encodeURIComponent(secret)}`;
+  for (const [k, v] of Object.entries(extra ?? {})) url += `&${k}=${encodeURIComponent(v)}`;
+  return url;
+}
+
+/* ---------------- Shopify source (primary volume) ---------------- */
+
+/** Start one async Shopify discovery run per niche keyword (webhook-driven). */
+export async function startShopify(queries: string[] = SHOPIFY_QUERIES, perQuery = SHOPIFY_PER_QUERY): Promise<void> {
+  for (const q of queries) {
+    const runRow = await logRun({ source: "shopify", actor_id: SHOPIFY_ACTOR, status: "running", params: { query: q, perQuery } });
+    await startRun(
+      SHOPIFY_ACTOR,
+      { query: q, shipsTo: "IN", maxItems: perQuery },
+      hookUrl("shopify", runRow ?? "", { cat: q })
+    );
+  }
+}
+
+/** Stage (webhook): Shopify run finished -> map -> normalize -> reachable -> store. */
+export async function handleShopifyStage(
+  datasetId: string,
+  runRow: string,
+  category?: string
+): Promise<{ inserted: number; duplicates: number }> {
+  const stores = await fetchDataset(datasetId);
+  const leads = onlyReachable(normalizeBatch(shopifyToRaw(stores as ShopifyStore[], category), "shopify"));
+  const result = await storeLeads(leads);
+  await updateRun(runRow, { status: "completed", leads_found: result.inserted });
+  return result;
 }
 
 // Volume targets for ~100 reachable leads/day. Not every advertiser page yields a
@@ -119,8 +164,13 @@ function hookUrl(stage: string, runRow: string): string {
 const DAILY_MAX_ADS = 300; // ad-library items to pull across all niche queries
 const DAILY_ADVERTISER_CAP = 200; // advertiser pages to enrich via the Pages scraper
 
-/** Stage 0: kick off the Ad Library run (fast; returns immediately). */
+/**
+ * Kick off the full daily scrape: Shopify (primary volume, many small runs) AND
+ * the Facebook Ad-Library path (supplementary, ad-running brands). Both are async
+ * and store via webhooks; dedupe-by-key merges the two sources.
+ */
 export async function startScrape(queries: string[] = NICHE_QUERIES, maxAds = DAILY_MAX_ADS): Promise<{ runRow: string | null }> {
+  await startShopify();
   const runRow = await logRun({ source: "facebook", actor_id: AD_LIBRARY_ACTOR, status: "running", params: { queries, maxAds } });
   await startRun(
     AD_LIBRARY_ACTOR,
@@ -152,14 +202,32 @@ export async function handlePagesStage(datasetId: string, runRow: string): Promi
 
 /** Synchronous full pipeline (for local testing / Vercel Pro). Slow (2-4 min). */
 export async function runScrapeSync(queries: string[] = NICHE_QUERIES, maxAds = 15) {
+  let inserted = 0;
+  let duplicates = 0;
+
+  // Shopify (primary): a few niche keywords inline to keep local runs reasonable.
+  for (const q of SHOPIFY_QUERIES.slice(0, 3)) {
+    const run = await startRun(SHOPIFY_ACTOR, { query: q, shipsTo: "IN", maxItems: 10 });
+    await waitForRun(run.runId);
+    const leads = onlyReachable(normalizeBatch(shopifyToRaw((await fetchDataset(run.datasetId)) as ShopifyStore[], q), "shopify"));
+    const r = await storeLeads(leads);
+    inserted += r.inserted;
+    duplicates += r.duplicates;
+  }
+
+  // Facebook Ad Library (supplementary).
   const adRun = await startRun(AD_LIBRARY_ACTOR, { searchQueries: queries, country: "IN", activeStatus: "active", maxAds });
   await waitForRun(adRun.runId);
   const pageUrls = pickAdvertisers((await fetchDataset(adRun.datasetId)) as AdItem[]);
-  if (!pageUrls.length) return { inserted: 0, duplicates: 0, advertisers: 0 };
-  const pagesRun = await startRun(PAGES_ACTOR, { startUrls: pageUrls.map((url) => ({ url })) });
-  await waitForRun(pagesRun.runId);
-  const result = await storeLeads(leadsFromPages((await fetchDataset(pagesRun.datasetId)) as PageItem[]));
-  return { ...result, advertisers: pageUrls.length };
+  if (pageUrls.length) {
+    const pagesRun = await startRun(PAGES_ACTOR, { startUrls: pageUrls.map((url) => ({ url })) });
+    await waitForRun(pagesRun.runId);
+    const r = await storeLeads(leadsFromPages((await fetchDataset(pagesRun.datasetId)) as PageItem[]));
+    inserted += r.inserted;
+    duplicates += r.duplicates;
+  }
+
+  return { inserted, duplicates, advertisers: pageUrls.length };
 }
 
 async function waitForRun(runId: string, maxSecs = 280) {

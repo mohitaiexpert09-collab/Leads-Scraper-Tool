@@ -6,6 +6,7 @@ import { ManualAddLead, SignOutButton, ScrapeNow } from "@/components/settings-c
 import { DEFAULT_WEIGHTS } from "@/lib/scoring";
 import { ACTORS, hasApifyToken } from "@/lib/apify";
 import { hasServiceRole } from "@/lib/supabase/admin";
+import { hasAirtable } from "@/lib/airtable";
 import { timeAgo } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
@@ -44,6 +45,7 @@ export default async function SettingsPage() {
   const serviceRole = hasServiceRole();
   const cronSecret = Boolean(process.env.CRON_SECRET);
   const siteUrl = Boolean(process.env.NEXT_PUBLIC_SITE_URL);
+  const airtable = hasAirtable();
   const automationReady = apify && serviceRole && cronSecret;
   const email = await getCurrentUserEmail();
   const lastRun = await getLastRun();
@@ -73,6 +75,7 @@ export default async function SettingsPage() {
             <StatusRow ok={serviceRole} label={serviceRole ? "Service role key set" : "Service role key missing"} hint="Lets cron/webhooks store leads automatically." />
             <StatusRow ok={cronSecret} label={cronSecret ? "Cron secret set" : "Cron secret missing"} hint="Secures the scrape + webhook endpoints." />
             <StatusRow ok={siteUrl} label={siteUrl ? "Site URL set" : "Site URL missing"} hint="Needed so Apify webhooks can call back (your deployed URL)." />
+            <StatusRow ok={airtable} label={airtable ? "Airtable mirror connected" : "Airtable not connected"} hint="Mirrors every lead + status update into your Airtable base. Add AIRTABLE_TOKEN + AIRTABLE_BASE_ID." />
           </CardContent>
         </Card>
 

@@ -70,11 +70,29 @@ kanban) · Follow-ups (overdue/today/upcoming) · Import · Templates · Setting
 
 ## Automated scraping (Scrape Now + daily)
 
-The app can run the whole pipeline itself — **Meta Ad Library → filter to small,
-reachable, founder-led Indian D2C brands → Facebook Pages enrichment (WhatsApp,
-phone, email) → Tier 1–4 score → store**. Because a full scrape takes 2–4 min
-(longer than serverless limits), runs start asynchronously and an **Apify webhook**
-delivers the results back for storage, so it works on any Vercel plan.
+The app runs two daily sources and merges them (dedupe by website/IG/phone):
+
+1. **Shopify (primary volume)** — `clearpath/shopify-store-leads` discovers Indian
+   D2C stores by niche keyword (kurti, saree, lehenga, skincare…) shipping to India
+   and returns **emails, phones & socials directly**. One small async run per keyword
+   accumulates to ~100 reachable leads/day.
+2. **Meta Ad Library (intent signal)** — small, founder-led brands **currently running
+   ads** → Facebook Pages enrichment (WhatsApp, phone, email).
+
+Both feed **Tier 1–4 scoring → store**. Because a full scrape takes minutes (longer than
+serverless limits), runs start asynchronously and an **Apify webhook** delivers results
+back for storage, so it works on any Vercel plan. Tune niches in
+[lib/scrape-filters.ts](lib/scrape-filters.ts) (`SHOPIFY_QUERIES`, `NICHE_QUERIES`).
+
+### Airtable mirror (optional)
+
+Set `AIRTABLE_TOKEN` + `AIRTABLE_BASE_ID` (+ optional `AIRTABLE_TABLE`, default `Leads`)
+and every new lead and every status/outreach/disposition change is pushed one-way into
+your Airtable base — a live view for the founder while the team works the funnel in the
+tool. Create a table with columns: `Company, Founder, Tier (number), Score (number),
+Status, WhatsApp, Phone, Email, Website, Instagram, Facebook, City, Category, Source,
+Followers (number), Ads Running (checkbox)`. Backfill existing leads:
+`npx tsx scripts/sync-airtable.ts`.
 
 Enable it with these env vars (locally in `.env.local` and in Vercel):
 

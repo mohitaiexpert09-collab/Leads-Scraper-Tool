@@ -1,4 +1,4 @@
-export type LeadSource = "google_maps" | "instagram" | "facebook" | "manual";
+export type LeadSource = "google_maps" | "instagram" | "facebook" | "shopify" | "manual";
 
 export type LeadStatus =
   | "new"
@@ -42,6 +42,7 @@ export interface Lead {
   owner_id: string | null;
   notes: string | null;
   raw_json: Record<string, unknown> | null;
+  airtable_id?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -113,5 +114,6 @@ export const SOURCE_LABELS: Record<LeadSource, string> = {
   google_maps: "Google Maps",
   instagram: "Instagram",
   facebook: "Facebook",
+  shopify: "Shopify",
   manual: "Manual",
 };

@@ -11,6 +11,7 @@ export const ACTORS: Record<Exclude<LeadSource, "manual">, string> = {
   google_maps: "compass~crawler-google-places",
   instagram: "apify~instagram-profile-scraper",
   facebook: "apify~facebook-pages-scraper",
+  shopify: "clearpath~shopify-store-leads",
 };
 
 const APIFY_BASE = "https://api.apify.com/v2";
