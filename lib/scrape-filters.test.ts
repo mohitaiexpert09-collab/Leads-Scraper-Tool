@@ -1,6 +1,18 @@
 import { describe, it, expect } from "vitest";
-import { pickAdvertisers, pagesToRaw, shopifyToRaw, cityFromAddress, onlyReachable, type AdItem } from "./scrape-filters";
+import {
+  pickAdvertisers,
+  pagesToRaw,
+  shopifyToRaw,
+  keepIndianPlaces,
+  usernamesFromPosts,
+  igToRaw,
+  onlyContactable,
+  cityFromAddress,
+  onlyReachable,
+  type AdItem,
+} from "./scrape-filters";
 import { normalizeBatch } from "./normalize";
+import { toIndianE164 } from "./whatsapp";
 
 describe("pickAdvertisers", () => {
   const ads: AdItem[] = [
@@ -99,6 +111,68 @@ describe("shopifyToRaw + normalize", () => {
   it("drops marketplaces and big/funded brands by name", () => {
     expect(shopifyToRaw([{ name: "Nykaa Fashion", websiteUrl: "https://nykaa.com" }])).toHaveLength(0);
     expect(shopifyToRaw([{ name: "Mamaearth", websiteUrl: "https://mamaearth.in" }])).toHaveLength(0);
+  });
+});
+
+describe("toIndianE164 (no fake foreign numbers)", () => {
+  it("accepts Indian formats", () => {
+    expect(toIndianE164("+91 98765 43210")).toBe("919876543210");
+    expect(toIndianE164("098765 43210")).toBe("919876543210");
+    expect(toIndianE164("9876543210")).toBe("919876543210");
+  });
+  it("rejects explicit foreign country codes", () => {
+    expect(toIndianE164("+1 (510) 709-6753")).toBeNull(); // US
+    expect(toIndianE164("+44 8083034683")).toBeNull(); // UK
+  });
+});
+
+describe("keepIndianPlaces", () => {
+  it("keeps India, drops foreign and excluded brands", () => {
+    const kept = keepIndianPlaces([
+      { title: "Jaipur Kurti Co", countryCode: "in", address: "Jaipur, India" },
+      { title: "US Saree Store", countryCode: "us", address: "Houston, USA" },
+      { title: "Nykaa", countryCode: "in", address: "Mumbai, India" },
+      { title: "Delhi Boutique", address: "Connaught Place, New Delhi, India" },
+    ]);
+    expect(kept.map((p) => p.title)).toEqual(["Jaipur Kurti Co", "Delhi Boutique"]);
+  });
+});
+
+describe("usernamesFromPosts + igToRaw", () => {
+  it("harvests unique brand usernames and mines the bio for contacts", () => {
+    const usernames = usernamesFromPosts([
+      { ownerUsername: "jaipurkurti" },
+      { ownerUsername: "jaipurkurti" },
+      { ownerUsername: "myntra" }, // excluded
+      { ownerUsername: "silai_studio" },
+    ]);
+    expect(usernames).toEqual(["jaipurkurti", "silai_studio"]);
+
+    const raw = igToRaw([
+      {
+        username: "jaipurkurti",
+        fullName: "Jaipur Kurti",
+        url: "https://instagram.com/jaipurkurti",
+        externalUrl: "https://jaipurkurti.com",
+        biography: "Handcrafted kurtis 🧵 Order on WhatsApp +91 98765 43210 | hello@jaipurkurti.com",
+        followersCount: 12000,
+        businessCategoryName: "Clothing (Brand)",
+      },
+    ]);
+    const [lead] = normalizeBatch(raw, "instagram");
+    expect(lead.company).toBe("Jaipur Kurti");
+    expect(lead.whatsapp).toBe("919876543210");
+    expect(lead.email).toBe("hello@jaipurkurti.com");
+    expect(lead.instagram_url).toContain("jaipurkurti");
+  });
+
+  it("onlyContactable keeps website-only IG leads (no phone)", () => {
+    const raw = igToRaw([
+      { username: "brandA", fullName: "Brand A", externalUrl: "https://branda.in", biography: "Just vibes" },
+      { username: "brandB", fullName: "Brand B", biography: "no links here" },
+    ]);
+    const leads = onlyContactable(normalizeBatch(raw, "instagram"));
+    expect(leads.map((l) => l.company)).toEqual(["Brand A"]);
   });
 });
 

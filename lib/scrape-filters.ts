@@ -4,6 +4,7 @@
  * the ones most likely to take a call from a new agency — and to drop
  * marketplaces and big/funded brands that won't engage early outreach.
  */
+import { toIndianE164 } from "./whatsapp";
 
 // India D2C, high-RTO niches to search the Ad Library for.
 export const NICHE_QUERIES = [
@@ -245,6 +246,130 @@ export interface ShopifyStore {
   phone?: unknown;
   address?: unknown;
   [k: string]: unknown;
+}
+
+/* ---------------- Google Maps source (Indian phone + website) ---------------- */
+
+// D2C-leaning search terms for Google Maps (run nationwide with countryCode="in").
+export const GMAPS_QUERIES = [
+  "kurti brand",
+  "ethnic wear brand",
+  "designer boutique",
+  "women clothing brand",
+  "saree brand",
+  "online clothing boutique",
+  "handmade jewellery brand",
+  "skincare brand",
+];
+
+export interface PlaceItem {
+  title?: string | null;
+  address?: string | null;
+  city?: string | null;
+  countryCode?: string | null;
+  categoryName?: string | null;
+  [k: string]: unknown;
+}
+
+/** Keep only India-based places, and drop marketplaces/big brands by name. */
+export function keepIndianPlaces(items: PlaceItem[]): PlaceItem[] {
+  return items.filter((p) => {
+    const cc = (p.countryCode || "").toLowerCase();
+    const inIndia = cc === "in" || /\bindia\b/i.test(p.address || "");
+    return inIndia && !EXCLUDE_NAME.test(p.title || "");
+  });
+}
+
+/* ---------------- Instagram source (social + bio contacts) ---------------- */
+
+// Indian D2C niche hashtags to discover brand accounts.
+export const INSTA_HASHTAGS = [
+  "kurtibrand",
+  "ethnicwear",
+  "indianwear",
+  "sareelove",
+  "boutiqueindia",
+  "handmadeinindia",
+  "indianskincare",
+  "sustainablefashionindia",
+  "kurtiset",
+  "indianjewellery",
+];
+
+const IN_PHONE_RE = /(?:\+?\s?91[\s-]?)?[6-9]\d{4}[\s-]?\d{5}\b/;
+
+function phoneFromText(text?: string | null): string | null {
+  if (!text) return null;
+  const m = text.match(IN_PHONE_RE);
+  if (!m) return null;
+  return toIndianE164(m[0]) ? m[0].trim() : null;
+}
+
+function emailFromText(text?: string | null): string | null {
+  if (!text) return null;
+  return text.match(EMAIL_RE)?.[0].toLowerCase() ?? null;
+}
+
+export interface IgPost {
+  ownerUsername?: string | null;
+  [k: string]: unknown;
+}
+
+/** Unique brand usernames from hashtag posts (excludes marketplaces/big brands). */
+export function usernamesFromPosts(posts: IgPost[], cap = 200): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const p of posts) {
+    const u = (p.ownerUsername || "").trim();
+    if (!u || seen.has(u.toLowerCase())) continue;
+    if (EXCLUDE_NAME.test(u)) continue;
+    seen.add(u.toLowerCase());
+    out.push(u);
+    if (out.length >= cap) break;
+  }
+  return out;
+}
+
+export interface IgProfile {
+  username?: string | null;
+  fullName?: string | null;
+  url?: string | null;
+  externalUrl?: string | null;
+  biography?: string | null;
+  followersCount?: number | null;
+  businessCategoryName?: string | null;
+  businessAddress?: { city_name?: string | null } | null;
+  [k: string]: unknown;
+}
+
+/** Map Instagram profiles into raw leads; mines the bio for phone/WhatsApp/email. */
+export function igToRaw(profiles: IgProfile[]): Record<string, unknown>[] {
+  return profiles
+    .filter((p) => p.username && !EXCLUDE_NAME.test(p.fullName || p.username || ""))
+    .map((p) => {
+      const phone = phoneFromText(p.biography);
+      return {
+        company: p.fullName || p.username,
+        username: p.username,
+        instagram_url: p.url || `https://instagram.com/${p.username}`,
+        website: p.externalUrl || null,
+        email: emailFromText(p.biography),
+        phone,
+        whatsapp: phone,
+        followers: p.followersCount ?? null,
+        category: p.businessCategoryName || null,
+        city: p.businessAddress?.city_name || null,
+        ads_running: null,
+      };
+    });
+}
+
+/** Instagram leads: keep only those we can act on — a website, or a mined
+ *  phone/email/WhatsApp (the IG handle alone is always present). */
+export function onlyContactable<
+  T extends { website: string | null; whatsapp: string | null; phone: string | null; email: string | null }
+>(leads: T[]): T[] {
+  return leads.filter((l) => l.website || l.whatsapp || l.phone || l.email);
 }
 
 /**

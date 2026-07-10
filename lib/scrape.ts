@@ -5,16 +5,25 @@ import { hasAirtable, syncLeadToAirtable } from "./airtable";
 import {
   NICHE_QUERIES,
   SHOPIFY_QUERIES,
+  GMAPS_QUERIES,
+  INSTA_HASHTAGS,
   pickAdvertisers,
   pagesToRaw,
   shopifyToRaw,
+  keepIndianPlaces,
+  usernamesFromPosts,
+  igToRaw,
   onlyReachable,
+  onlyContactable,
   type AdItem,
   type PageItem,
   type ShopifyStore,
+  type PlaceItem,
+  type IgPost,
+  type IgProfile,
 } from "./scrape-filters";
 
-export { NICHE_QUERIES, SHOPIFY_QUERIES };
+export { NICHE_QUERIES, SHOPIFY_QUERIES, GMAPS_QUERIES, INSTA_HASHTAGS };
 
 /**
  * Automated scrape pipeline (buying-intent, easily-reachable leads):
@@ -31,10 +40,16 @@ const APIFY = "https://api.apify.com/v2";
 export const AD_LIBRARY_ACTOR = "automation-lab~facebook-ads-library";
 export const PAGES_ACTOR = "apify~facebook-pages-scraper";
 export const SHOPIFY_ACTOR = "clearpath~shopify-store-leads";
+export const GMAPS_ACTOR = "compass~crawler-google-places";
+export const IG_HASHTAG_ACTOR = "apify~instagram-hashtag-scraper";
+export const IG_PROFILE_ACTOR = "apify~instagram-profile-scraper";
 
 // Stores to pull per niche keyword. ~11 keywords × this ≈ enough raw to net ~100
-// reachable, deduped Shopify leads/day.
+// reachable, deduped Shopify leads/day. (Shopify is no longer part of the daily
+// run — it returned foreign diaspora stores — but kept for manual use.)
 const SHOPIFY_PER_QUERY = 12;
+const GMAPS_PER_SEARCH = 20; // places per search term (nationwide, India)
+const IG_PER_TAG = 15; // posts per hashtag to harvest brand usernames
 
 function token(): string {
   const t = process.env.APIFY_TOKEN;
@@ -158,6 +173,64 @@ export async function handleShopifyStage(
   return result;
 }
 
+/* ---------------- Google Maps source (Indian phone + website) ---------------- */
+
+/** Start a nationwide India Google Maps run (with contact/social enrichment). */
+export async function startGmaps(queries: string[] = GMAPS_QUERIES, perSearch = GMAPS_PER_SEARCH): Promise<{ runRow: string | null }> {
+  const runRow = await logRun({ source: "google_maps", actor_id: GMAPS_ACTOR, status: "running", params: { queries, perSearch } });
+  await startRun(
+    GMAPS_ACTOR,
+    {
+      searchStringsArray: queries,
+      countryCode: "in",
+      language: "en",
+      website: "withWebsite", // only online brands (have a site)
+      scrapeContacts: true, // enrich emails + social profiles from the website
+      maxCrawledPlacesPerSearch: perSearch,
+    },
+    hookUrl("gmaps", runRow ?? "")
+  );
+  return { runRow };
+}
+
+/** Stage (webhook): Google Maps run finished -> India filter -> reachable -> store. */
+export async function handleGmapsStage(datasetId: string, runRow: string): Promise<{ inserted: number; duplicates: number }> {
+  const items = keepIndianPlaces((await fetchDataset(datasetId)) as PlaceItem[]);
+  const leads = onlyReachable(normalizeBatch(items as Record<string, unknown>[], "google_maps"));
+  const result = await storeLeads(leads);
+  await updateRun(runRow, { status: "completed", leads_found: result.inserted });
+  return result;
+}
+
+/* ---------------- Instagram source (social handles + bio contacts) ---------------- */
+
+/** Start the hashtag discovery run (harvests Indian brand usernames). */
+export async function startInstagram(hashtags: string[] = INSTA_HASHTAGS, perTag = IG_PER_TAG): Promise<{ runRow: string | null }> {
+  const runRow = await logRun({ source: "instagram", actor_id: IG_HASHTAG_ACTOR, status: "running", params: { hashtags, perTag } });
+  await startRun(IG_HASHTAG_ACTOR, { hashtags, resultsType: "posts", resultsLimit: perTag }, hookUrl("ightags", runRow ?? ""));
+  return { runRow };
+}
+
+/** Stage 1 (webhook): hashtag posts finished -> unique usernames -> profile run. */
+export async function handleIgHashtagStage(datasetId: string, runRow: string) {
+  const usernames = usernamesFromPosts((await fetchDataset(datasetId)) as IgPost[]);
+  await updateRun(runRow, { params: { usernames: usernames.length } });
+  if (!usernames.length) {
+    await updateRun(runRow, { status: "completed", leads_found: 0 });
+    return;
+  }
+  await startRun(IG_PROFILE_ACTOR, { usernames }, hookUrl("igprofiles", runRow));
+}
+
+/** Stage 2 (webhook): profiles finished -> map (bio contacts) -> contactable -> store. */
+export async function handleIgProfileStage(datasetId: string, runRow: string): Promise<{ inserted: number; duplicates: number }> {
+  const profiles = await fetchDataset(datasetId);
+  const leads = onlyContactable(normalizeBatch(igToRaw(profiles as IgProfile[]), "instagram"));
+  const result = await storeLeads(leads);
+  await updateRun(runRow, { status: "completed", leads_found: result.inserted });
+  return result;
+}
+
 // Volume targets for ~100 reachable leads/day. Not every advertiser page yields a
 // reachable lead (some have no public phone/WhatsApp/email), so we over-fetch ads
 // and enrich a wider set of advertiser pages, then keep only the reachable ones.
@@ -165,12 +238,16 @@ const DAILY_MAX_ADS = 300; // ad-library items to pull across all niche queries
 const DAILY_ADVERTISER_CAP = 200; // advertiser pages to enrich via the Pages scraper
 
 /**
- * Kick off the full daily scrape: Shopify (primary volume, many small runs) AND
- * the Facebook Ad-Library path (supplementary, ad-running brands). Both are async
- * and store via webhooks; dedupe-by-key merges the two sources.
+ * Kick off the full daily scrape, all India-targeted and async (webhook-stored):
+ *   - Google Maps (countryCode=IN) -> real Indian phone + website + email/social
+ *   - Instagram (Indian niche hashtags -> profiles) -> social handles + bio contacts
+ *   - Facebook Ad Library (country=IN) -> ad-running brands (intent)
+ * Dedupe-by-key merges all three. (Shopify was dropped — shipsTo:IN returned
+ * foreign diaspora stores, not Indian founders.)
  */
 export async function startScrape(queries: string[] = NICHE_QUERIES, maxAds = DAILY_MAX_ADS): Promise<{ runRow: string | null }> {
-  await startShopify();
+  await startGmaps();
+  await startInstagram();
   const runRow = await logRun({ source: "facebook", actor_id: AD_LIBRARY_ACTOR, status: "running", params: { queries, maxAds } });
   await startRun(
     AD_LIBRARY_ACTOR,
@@ -200,17 +277,26 @@ export async function handlePagesStage(datasetId: string, runRow: string): Promi
   return result;
 }
 
-/** Synchronous full pipeline (for local testing / Vercel Pro). Slow (2-4 min). */
+/** Synchronous pipeline (for local testing / Vercel Pro). Slow (2-4 min). Runs
+ *  Google Maps (Indian phone + website) + Facebook Ad Library. Instagram is
+ *  2-stage and only runs in the async daily flow to keep local runs bounded. */
 export async function runScrapeSync(queries: string[] = NICHE_QUERIES, maxAds = 15) {
   let inserted = 0;
   let duplicates = 0;
 
-  // Shopify (primary): a few niche keywords inline to keep local runs reasonable.
-  for (const q of SHOPIFY_QUERIES.slice(0, 3)) {
-    const run = await startRun(SHOPIFY_ACTOR, { query: q, shipsTo: "IN", maxItems: 10 });
-    await waitForRun(run.runId);
-    const leads = onlyReachable(normalizeBatch(shopifyToRaw((await fetchDataset(run.datasetId)) as ShopifyStore[], q), "shopify"));
-    const r = await storeLeads(leads);
+  // Google Maps (primary): real Indian businesses with phone + website.
+  const g = await startRun(GMAPS_ACTOR, {
+    searchStringsArray: GMAPS_QUERIES.slice(0, 4),
+    countryCode: "in",
+    language: "en",
+    website: "withWebsite",
+    scrapeContacts: true,
+    maxCrawledPlacesPerSearch: 15,
+  });
+  await waitForRun(g.runId);
+  {
+    const items = keepIndianPlaces((await fetchDataset(g.datasetId)) as PlaceItem[]);
+    const r = await storeLeads(onlyReachable(normalizeBatch(items as Record<string, unknown>[], "google_maps")));
     inserted += r.inserted;
     duplicates += r.duplicates;
   }
