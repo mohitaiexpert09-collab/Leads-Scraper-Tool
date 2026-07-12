@@ -29,6 +29,19 @@ export function timeAgo(date: string | Date): string {
   return "just now";
 }
 
+export type Segment = "Real estate" | "D2C";
+export const SEGMENTS: Segment[] = ["D2C", "Real estate"];
+
+const REALESTATE_RE = /real\s?estate|realtor|realty|\bproperty\b|properties|estate agent|brokerage/i;
+
+/**
+ * Which campaign a lead belongs to, derived from its category/company (no DB
+ * column needed): real-estate agencies vs D2C brands.
+ */
+export function segmentOf(lead: { category?: string | null; company?: string | null }): Segment {
+  return REALESTATE_RE.test(`${lead.category || ""} ${lead.company || ""}`) ? "Real estate" : "D2C";
+}
+
 export function initials(name: string | null | undefined): string {
   if (!name) return "?";
   return name

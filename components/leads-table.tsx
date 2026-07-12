@@ -5,8 +5,8 @@ import Link from "next/link";
 import { Search, MessageCircle, Globe, Instagram, Facebook } from "lucide-react";
 import type { Lead, LeadSource, LeadStatus, Tier } from "@/lib/types";
 import { SOURCE_LABELS, STATUS_LABELS, STATUS_ORDER } from "@/lib/types";
-import { Input, Select, TierBadge, StatusBadge, EmptyState } from "@/components/ui";
-import { formatNumber } from "@/lib/utils";
+import { Input, Select, TierBadge, StatusBadge, Badge, EmptyState } from "@/components/ui";
+import { formatNumber, segmentOf, SEGMENTS } from "@/lib/utils";
 import { whatsappLink } from "@/lib/whatsapp";
 
 export function LeadsTable({ leads }: { leads: Lead[] }) {
@@ -14,10 +14,12 @@ export function LeadsTable({ leads }: { leads: Lead[] }) {
   const [tier, setTier] = useState<string>("all");
   const [status, setStatus] = useState<string>("all");
   const [source, setSource] = useState<string>("all");
+  const [segment, setSegment] = useState<string>("all");
 
   const filtered = useMemo(() => {
     const q = search.toLowerCase();
     return leads.filter((l) => {
+      if (segment !== "all" && segmentOf(l) !== segment) return false;
       if (tier !== "all" && String(l.tier) !== tier) return false;
       if (status !== "all" && l.status !== status) return false;
       if (source !== "all" && l.source !== source) return false;
@@ -30,7 +32,7 @@ export function LeadsTable({ leads }: { leads: Lead[] }) {
         return false;
       return true;
     });
-  }, [leads, search, tier, status, source]);
+  }, [leads, search, tier, status, source, segment]);
 
   return (
     <div className="space-y-4">
@@ -44,6 +46,14 @@ export function LeadsTable({ leads }: { leads: Lead[] }) {
             className="pl-9"
           />
         </div>
+        <Select value={segment} onChange={(e) => setSegment(e.target.value)}>
+          <option value="all">All segments</option>
+          {SEGMENTS.map((s) => (
+            <option key={s} value={s}>
+              {s}
+            </option>
+          ))}
+        </Select>
         <Select value={tier} onChange={(e) => setTier(e.target.value)}>
           <option value="all">All tiers</option>
           {[1, 2, 3, 4].map((t) => (
@@ -91,7 +101,10 @@ export function LeadsTable({ leads }: { leads: Lead[] }) {
                   <tr key={l.id} className="border-b border-[var(--color-border)] last:border-0 hover:bg-[var(--color-surface-2)]">
                     <td className="px-4 py-3">
                       <Link href={`/leads/${l.id}`} className="block">
-                        <div className="font-medium">{l.company || "—"}</div>
+                        <div className="flex items-center gap-2">
+                          <span className="font-medium">{l.company || "—"}</span>
+                          <Badge className="text-[10px] text-[var(--color-text-dim)]">{segmentOf(l)}</Badge>
+                        </div>
                         <div className="text-xs text-[var(--color-muted)]">
                           {l.founder_name || "Unknown"} · {l.city || "—"}
                           {l.ads_running && <span className="ml-1 text-[var(--color-tier1)]">· ⚡ads</span>}
